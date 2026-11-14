@@ -99,3 +99,11 @@ class TestIsSilenceHallucination:
     def test_japanese_thanks_for_cooperation(self):
         assert is_silence_hallucination("ご協力ありがとうございました")
         assert is_silence_hallucination("ご協力ありがとうございました。")
+
+    def test_japanese_thanks(self):
+        assert is_silence_hallucination("ありがとうございました")
+        assert is_silence_hallucination("ありがとうございました。")
+
+    def test_japanese_hai(self):
+        assert is_silence_hallucination("はい")
+        assert is_silence_hallucination("はい。")
