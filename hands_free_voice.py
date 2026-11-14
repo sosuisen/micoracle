@@ -124,6 +124,10 @@ SILENCE_HALLUCINATIONS = {
     "thank you", "thank you.", "thanks", "thanks.", "thanks for watching",
     "thanks for watching.", "amen", "amen.", "you", "you.", "bye", "bye.",
     ".", "okay", "okay.", "ok", "ok.",
+    # Japanese Whisper silence hallucinations
+    "ありがとうございました", "ありがとうございました。",
+    "ご視聴ありがとうございました", "ご視聴ありがとうございました。",
+    "おやすみなさい", "おやすみなさい。",
 }
 
 
