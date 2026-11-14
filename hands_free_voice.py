@@ -8,7 +8,7 @@ Flow:
      the captured utterance.
   4. If the text starts with "claude" / "codex" (fuzzy), the remainder is pasted
      into the target app via the platform adapter (macOS / Linux / Windows).
-  5. Short spoken status cues ("listening", "sent", "error") go out via the
+  5. Short spoken status cues ("ok", "sent", "error") go out via the
      pluggable TTS backend (macOS say / pyttsx3 / OpenAI / Azure).
 
 OS is auto-detected. Backends default to the best local option per platform,
@@ -82,6 +82,9 @@ CHECK_FIRST_N_WORDS = 3
 SESSION_TIMEOUT_SECS = 120.0   # conversation mode ends after this much silence
 ECHO_WINDOW_SECS = 15.0        # our own TTS output is ignored for this long
 ECHO_FUZZY_THRESHOLD = 0.8
+# Spoken after a bare wake word. A short word keeps the wait short.
+# "ok" is also in SILENCE_HALLUCINATIONS. Its echo never becomes a command.
+WAKE_ACK_PHRASE = os.environ.get("MICORACLE_WAKE_ACK", "").strip() or "ok"
 
 WAKE_VARIANTS: dict[str, set[str]] = {
     "claude": {
@@ -879,11 +882,11 @@ def handle_utterance(ctx: DispatchContext, wake_state: WakeState, text: str) -> 
         # bare "micoracle" opens a conversation session (supersedes the 8-s arm)
         session.start()
         print("[micoracle] conversation on — keep talking; say 'stop' to end", flush=True)
-        ctx.tts.speak("listening")
+        ctx.tts.speak(WAKE_ACK_PHRASE)
     else:
         wake_state.arm(wake)
         print(f"[{wake}] listening...", flush=True)
-        ctx.tts.speak("listening")
+        ctx.tts.speak(WAKE_ACK_PHRASE)
 
 
 def _handle_session_utterance(
@@ -932,11 +935,11 @@ def _handle_session_utterance(
         if cmd:
             _dispatch(ctx, wake, cmd)
         elif wake == "micoracle":
-            ctx.tts.speak("listening")
+            ctx.tts.speak(WAKE_ACK_PHRASE)
         else:
             wake_state.arm(wake)
             print(f"[{wake}] listening...", flush=True)
-            ctx.tts.speak("listening")
+            ctx.tts.speak(WAKE_ACK_PHRASE)
         session.touch()
         return
 
@@ -948,6 +951,10 @@ def _handle_session_utterance(
 def _handle_armed_followup(
     ctx: DispatchContext, wake_state: WakeState, armed: str, text: str,
 ) -> None:
+    # Our own ack can come back through the mic. Stay armed for the real command.
+    if ctx.echo is not None and ctx.echo.is_echo(text):
+        print(f"[echo] {text}", flush=True)
+        return
     wake, idx = detect_wake_word(text)
     if wake:
         cmd = extract_command(text, idx)
@@ -959,11 +966,11 @@ def _handle_armed_followup(
             wake_state.clear()
             ctx.session.start()
             print("[micoracle] conversation on — keep talking; say 'stop' to end", flush=True)
-            ctx.tts.speak("listening")
+            ctx.tts.speak(WAKE_ACK_PHRASE)
         else:
             wake_state.arm(wake)
             print(f"[{wake}] listening...", flush=True)
-            ctx.tts.speak("listening")
+            ctx.tts.speak(WAKE_ACK_PHRASE)
         return
     cmd = text.strip(" ,.!?;:")
     if cmd:
