@@ -342,12 +342,24 @@ class WindowsAdapter(PlatformAdapter):
                 pass
 
         self._win32gui.EnumWindows(enum_cb, None)
-        if matching_hwnd:
-            try:
-                self._win32gui.SetForegroundWindow(matching_hwnd)
-            except Exception:
-                # Best-effort; some focus-stealing rules block this.
-                pass
+        if not matching_hwnd:
+            raise RuntimeError(f"Target window not found: {target_app}")
+
+        import win32api, win32con  # type: ignore
+        # Simulate an Alt tap so Windows allows the focus change
+        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+        if self._win32gui.IsIconic(matching_hwnd):
+            self._win32gui.ShowWindow(matching_hwnd, win32con.SW_RESTORE)
+        try:
+            self._win32gui.SetForegroundWindow(matching_hwnd)
+        except Exception:
+            pass
+        time.sleep(0.05)
+
+        # Safety check: never paste into the wrong window
+        if self._win32gui.GetForegroundWindow() != matching_hwnd:
+            raise RuntimeError("Could not bring target window to front; paste skipped.")
 
 
 # ───────────────────────────── Factory ────────────────────────────

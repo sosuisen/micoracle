@@ -23,6 +23,7 @@ import itertools
 import os
 import platform
 import queue
+import re
 import sys
 import threading
 import time
@@ -127,6 +128,11 @@ SILENCE_HALLUCINATIONS = {
     "thank you", "thank you.", "thanks", "thanks.", "thanks for watching",
     "thanks for watching.", "amen", "amen.", "you", "you.", "bye", "bye.",
     ".", "okay", "okay.", "ok", "ok.",
+    # Japanese Whisper silence hallucinations
+    "ありがとうございました", "ありがとうございました。",
+    "ご視聴ありがとうございました", "ご視聴ありがとうございました。",
+    "ご協力ありがとうございました", "ご協力ありがとうございました。",
+    "おやすみなさい", "おやすみなさい。",
 }
 
 
@@ -699,6 +705,12 @@ def main() -> int:
     wake_state = WakeState()
     convo = ConversationSession()
 
+    # Dictation-only mode: drop the "micoracle" assistant wake word so false
+    # triggers never open a conversation session.
+    if os.environ.get("MICORACLE_DISABLE_ASSISTANT", "").strip() == "1":
+        WAKE_VARIANTS.pop("micoracle", None)
+        print("  Assistant:        disabled (MICORACLE_DISABLE_ASSISTANT=1)", flush=True)
+
     # ── Pro features (entitlement-gated; core stays free) ────────────
     entitlement = pro.load_entitlement()
     macro_store: _macros.MacroStore | None = None
@@ -752,6 +764,10 @@ def main() -> int:
                 continue
             if is_silence_hallucination(text):
                 continue
+            # One-breath "Claude, <Japanese>": the local backend is English-only,
+            # so re-transcribe the same audio with the command backend.
+            if not use_cmd and command_stt is not stt_backend:
+                text = _retranscribe_one_breath(text, pcm, command_stt)
             handle_utterance(ctx, wake_state, text)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -848,6 +864,28 @@ class DispatchContext:
 
 
 # ─────────────────────── utterance routing ────────────────────────
+
+
+_WAKE_PREFIX_RE = re.compile(
+    r"^\s*(?:hey\s+|ok\s+)?(?:claude|cloud|clod|codex|クロード|くろーど|クラウド|コーデックス)"
+    r"[\s、,。.!！?？:：]*",
+    re.IGNORECASE,
+)
+
+
+def _retranscribe_one_breath(text: str, pcm, command_stt) -> str:
+    """If ``text`` is "claude <command>" from the local English STT, redo the
+    command part with ``command_stt`` (e.g. Groq in Japanese)."""
+    wake, idx = detect_wake_word(text)
+    if wake not in ("claude", "codex") or not extract_command(text, idx):
+        return text
+    try:
+        redo = command_stt.transcribe(pcm, SAMPLE_RATE)
+    except Exception as exc:
+        print(f"[retranscribe error] {exc}", flush=True)
+        return text
+    cmd = _WAKE_PREFIX_RE.sub("", redo or "", count=1).strip(" ,.!?;:、。")
+    return f"{wake} {cmd}" if cmd else text
 
 
 def handle_utterance(ctx: DispatchContext, wake_state: WakeState, text: str) -> None:
