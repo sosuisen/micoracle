@@ -80,7 +80,7 @@ VAD_AGGRESSIVENESS = 2         # 0-3; higher = stricter silence filtering
 
 FOLLOWUP_TIMEOUT_SECS = 8.0    # how long to stay armed after a bare wake word
 # "claude" / "codex" dictation stays armed this long after each command.
-DICTATION_TIMEOUT_SECS = 120.0
+DICTATION_TIMEOUT_SECS = 30.0
 DICTATION_WAKES = ("claude", "codex")
 WAKE_FUZZY_THRESHOLD = 0.78
 CHECK_FIRST_N_WORDS = 3
