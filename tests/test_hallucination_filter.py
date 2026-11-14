@@ -95,3 +95,7 @@ class TestIsSilenceHallucination:
 
     def test_mixed_case(self):
         assert is_silence_hallucination("THANK YOU.")
+
+    def test_japanese_thanks_for_cooperation(self):
+        assert is_silence_hallucination("ご協力ありがとうございました")
+        assert is_silence_hallucination("ご協力ありがとうございました。")
