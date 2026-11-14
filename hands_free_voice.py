@@ -700,6 +700,12 @@ def main() -> int:
     wake_state = WakeState()
     convo = ConversationSession()
 
+    # Dictation-only mode: drop the "micoracle" assistant wake word so false
+    # triggers never open a conversation session.
+    if os.environ.get("MICORACLE_DISABLE_ASSISTANT", "").strip() == "1":
+        WAKE_VARIANTS.pop("micoracle", None)
+        print("  Assistant:        disabled (MICORACLE_DISABLE_ASSISTANT=1)", flush=True)
+
     # ── Pro features (entitlement-gated; core stays free) ────────────
     entitlement = pro.load_entitlement()
     macro_store: _macros.MacroStore | None = None
