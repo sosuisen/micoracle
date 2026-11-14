@@ -90,7 +90,7 @@ class TestSessionLifecycle:
         ctx = make_ctx(agent=FakeRunner(), session=session)
         hfv.handle_utterance(ctx, hfv.WakeState(), "micoracle")
         assert session.active()
-        assert "listening" in ctx.tts.spoken
+        assert hfv.WAKE_ACK_PHRASE in ctx.tts.spoken
 
     def test_followup_needs_no_wake_word(self, monkeypatch):
         runner = FakeRunner()
@@ -221,3 +221,28 @@ class TestSessionDictation:
         hfv.handle_utterance(ctx, ws, "fix the tests")
         assert ctx.adapter.pasted == [("fix the tests", "Terminal")]
         assert runner.submitted == []
+
+
+class TestWakeAck:
+    # 素の「claude」で待ち受けると、確認の言葉として WAKE_ACK_PHRASE を話す
+    def test_bare_claude_speaks_wake_ack(self):
+        ctx = make_ctx()
+        hfv.handle_utterance(ctx, hfv.WakeState(), "claude")
+        assert ctx.tts.spoken == [hfv.WAKE_ACK_PHRASE]
+
+    # 確認の言葉の既定値は「ok」である
+    def test_wake_ack_default_is_ok(self):
+        assert hfv.WAKE_ACK_PHRASE == "ok"
+
+    # 待ち受け中にマイクが拾った自分の確認の言葉は、送らずに待ち受けを続ける
+    def test_own_wake_ack_echo_keeps_followup_armed(self):
+        guard = hfv.EchoGuard()
+        ctx = make_ctx(echo=guard)
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        guard.note(hfv.WAKE_ACK_PHRASE)
+        hfv.handle_utterance(ctx, ws, "OK。")
+        assert ctx.adapter.pasted == []
+        assert ws.active_backend() == "claude"
+        hfv.handle_utterance(ctx, ws, "テストを直して")
+        assert ctx.adapter.pasted == [("テストを直して", "Terminal")]
