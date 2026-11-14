@@ -280,6 +280,8 @@ def _http_post(url: str, body: bytes, headers: dict, timeout: int = 60) -> dict:
     import json
     import urllib.error
     import urllib.request
+    headers = dict(headers)
+    headers.setdefault("User-Agent", "micoracle/1.6 (+https://github.com/thepradip/micoracle)")
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -294,6 +296,8 @@ def _http_get(url: str, headers: dict, timeout: int = 30) -> dict:
     import json
     import urllib.error
     import urllib.request
+    headers = dict(headers)
+    headers.setdefault("User-Agent", "micoracle/1.6 (+https://github.com/thepradip/micoracle)")
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
