@@ -246,3 +246,103 @@ class TestWakeAck:
         assert ws.active_backend() == "claude"
         hfv.handle_utterance(ctx, ws, "テストを直して")
         assert ctx.adapter.pasted == [("テストを直して", "Terminal")]
+
+
+class FakeCues:
+    def __init__(self):
+        self.events = []
+
+    def wake(self):
+        self.events.append("wake")
+
+    def sent(self):
+        self.events.append("sent")
+
+    def end(self):
+        self.events.append("end")
+
+
+class TestCueRouting:
+    # 待ち受けと送信のときに、設定した合図を出す
+    def test_wake_and_sent_use_configured_cues(self):
+        ctx = make_ctx()
+        ctx.cues = FakeCues()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "テストを直して")
+        assert ctx.cues.events == ["wake", "sent"]
+        assert ctx.tts.spoken == []
+
+    # 合図を設定しなければ、声で「ok」と「sent」を話す
+    def test_default_cues_speak(self):
+        ctx = make_ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "テストを直して")
+        assert ctx.tts.spoken == [hfv.WAKE_ACK_PHRASE, "sent"]
+
+
+class TestDictationListening:
+    def _ctx(self, session=None):
+        ctx = make_ctx(session=session)
+        ctx.cues = FakeCues()
+        return ctx
+
+    # 素の「claude」は、口述の待ち受けを120秒にする
+    def test_bare_claude_listens_for_dictation_timeout(self):
+        ctx = self._ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        assert ws.active_backend() == "claude"
+        assert ws._expires_at - time.monotonic() > hfv.FOLLOWUP_TIMEOUT_SECS
+        assert hfv.DICTATION_TIMEOUT_SECS == 120.0
+
+    # 送ったあとも待ち受けが続き、ウェイクワードなしで次の文を送れる
+    def test_keeps_listening_after_sent(self):
+        ctx = self._ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "テストを直して")
+        hfv.handle_utterance(ctx, ws, "コミットして")
+        assert ctx.adapter.pasted == [
+            ("テストを直して", "Terminal"), ("コミットして", "Terminal"),
+        ]
+        assert ws.active_backend() == "claude"
+        assert ctx.cues.events == ["wake", "sent", "sent"]
+
+    # 一息で話したコマンドのあとも、待ち受けが続く
+    def test_one_breath_command_starts_listening(self):
+        ctx = self._ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude fix the bug")
+        hfv.handle_utterance(ctx, ws, "コミットして")
+        assert ctx.adapter.pasted == [
+            ("fix the bug", "Terminal"), ("コミットして", "Terminal"),
+        ]
+
+    # 「stop」で待ち受けを終え、終わりの合図を出す
+    def test_stop_ends_listening(self):
+        ctx = self._ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "stop")
+        assert ws.active_backend() is None
+        assert ctx.adapter.pasted == []
+        assert ctx.cues.events == ["wake", "end"]
+
+    # 日本語の「ストップ」でも、待ち受けを終える
+    def test_japanese_stop_ends_listening(self):
+        ctx = self._ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "ストップ。")
+        assert ws.active_backend() is None
+        assert ctx.adapter.pasted == []
+
+    # 素の「micoracle」の待ち受けは、短いままである
+    def test_bare_micoracle_without_session_keeps_short_followup(self):
+        ctx = self._ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "micoracle")
+        assert ws.active_backend() == "micoracle"
+        assert ws._expires_at - time.monotonic() <= hfv.FOLLOWUP_TIMEOUT_SECS
