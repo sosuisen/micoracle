@@ -27,6 +27,7 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,6 +79,9 @@ PREROLL_FRAMES = 10            # ~300 ms of audio retained before onset
 VAD_AGGRESSIVENESS = 2         # 0-3; higher = stricter silence filtering
 
 FOLLOWUP_TIMEOUT_SECS = 8.0    # how long to stay armed after a bare wake word
+# "claude" / "codex" dictation stays armed this long after each command.
+DICTATION_TIMEOUT_SECS = 120.0
+DICTATION_WAKES = ("claude", "codex")
 WAKE_FUZZY_THRESHOLD = 0.78
 CHECK_FIRST_N_WORDS = 3
 
@@ -242,27 +246,70 @@ def is_silence_hallucination(text: str) -> bool:
 
 
 class WakeState:
-    """Remembers which wake word is 'armed' for a follow-up utterance."""
+    """Remembers which wake word is 'armed' for a follow-up utterance.
 
-    def __init__(self) -> None:
+    With ``on_expire``, a timer reports the end of each arm that runs out.
+    The STT worker arms and clears. The timer thread reports the expiry.
+    """
+
+    def __init__(
+        self,
+        on_expire: Callable[[str], None] | None = None,
+        timer_factory: Callable[..., threading.Timer] = threading.Timer,
+    ) -> None:
         self._backend: str | None = None
         self._expires_at: float = 0.0
+        self._on_expire = on_expire
+        self._timer_factory = timer_factory
+        self._timer: threading.Timer | None = None
+        # Bumped by arm() and clear(). A timer from an older arm stays quiet.
+        self._generation = 0
+        self._lock = threading.Lock()
 
     def arm(self, backend: str, timeout_secs: float = FOLLOWUP_TIMEOUT_SECS) -> None:
-        self._backend = backend
-        self._expires_at = time.monotonic() + timeout_secs
+        with self._lock:
+            self._cancel_timer()
+            self._generation += 1
+            self._backend = backend
+            self._expires_at = time.monotonic() + timeout_secs
+            if self._on_expire is not None:
+                timer = self._timer_factory(
+                    timeout_secs, self._expire, args=(self._generation, backend),
+                )
+                timer.daemon = True
+                timer.start()
+                self._timer = timer
 
     def clear(self) -> None:
-        self._backend = None
-        self._expires_at = 0.0
+        with self._lock:
+            self._cancel_timer()
+            self._generation += 1
+            self._backend = None
+            self._expires_at = 0.0
 
     def active_backend(self) -> str | None:
-        if not self._backend:
-            return None
-        if time.monotonic() > self._expires_at:
-            self.clear()
-            return None
-        return self._backend
+        with self._lock:
+            if not self._backend:
+                return None
+            if time.monotonic() > self._expires_at:
+                # Not clear(): the pending timer must still report this end.
+                self._backend = None
+                return None
+            return self._backend
+
+    def _cancel_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+    def _expire(self, generation: int, backend: str) -> None:
+        with self._lock:
+            if generation != self._generation:
+                return
+            self._backend = None
+            self._timer = None
+        if self._on_expire is not None:
+            self._on_expire(backend)
 
 
 # ─────────────────────── conversation session ─────────────────────
@@ -710,7 +757,11 @@ def main() -> int:
     vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
     audio_q: queue.Queue[np.ndarray] = queue.Queue()
     utterance_q: queue.Queue[np.ndarray] = queue.Queue()
-    wake_state = WakeState()
+    def on_listening_expired(backend: str) -> None:
+        print(f"[{backend}] listening ended", flush=True)
+        cues.end()
+
+    wake_state = WakeState(on_expire=on_listening_expired)
     convo = ConversationSession()
 
     # Dictation-only mode: drop the "micoracle" assistant wake word so false
@@ -837,6 +888,9 @@ def main() -> int:
     print("  Conversation:     one 'micoracle, …' opens a session — keep talking, "
           "no wake word needed; say 'stop' to end "
           f"(auto-ends after {int(SESSION_TIMEOUT_SECS)}s of silence)")
+    print("  Dictation:        after 'claude' / 'codex', keep talking — "
+          "no wake word needed; say 'stop' to end "
+          f"(auto-ends after {int(DICTATION_TIMEOUT_SECS)}s of silence)")
     print("  (non-wake-word speech outside a conversation is ignored)")
     print()
 
@@ -871,7 +925,7 @@ class DispatchContext:
     agent: "object | None" = None  # agent.AgentRunner (tool-calling), optional
     session: "ConversationSession | None" = None
     echo: "EchoGuard | None" = None
-    cues: "_cues.Cues | None" = None
+    cues: _cues.Cues | None = None
 
     def __post_init__(self) -> None:
         if self.cues is None:
@@ -929,7 +983,7 @@ def handle_utterance(ctx: DispatchContext, wake_state: WakeState, text: str) -> 
     cmd = extract_command(text, idx)
     if cmd:
         _dispatch(ctx, wake, cmd)
-        wake_state.clear()
+        _keep_listening(wake_state, wake)
         _maybe_start_session(ctx, wake)
     elif wake == "micoracle" and session is not None:
         # bare "micoracle" opens a conversation session (supersedes the 8-s arm)
@@ -937,9 +991,7 @@ def handle_utterance(ctx: DispatchContext, wake_state: WakeState, text: str) -> 
         print("[micoracle] conversation on — keep talking; say 'stop' to end", flush=True)
         ctx.cues.wake()
     else:
-        wake_state.arm(wake)
-        print(f"[{wake}] listening...", flush=True)
-        ctx.cues.wake()
+        _start_listening(ctx, wake_state, wake)
 
 
 def _handle_session_utterance(
@@ -959,6 +1011,9 @@ def _handle_session_utterance(
             ctx.agent.reset_history()
         session.end()
         print("[micoracle] conversation ended", flush=True)
+        if wake_state.active_backend():
+            wake_state.clear()
+            ctx.cues.end()
         if not was_busy:
             ctx.tts.speak("Stopped.")  # busy: the aborted task's report speaks
         return
@@ -987,12 +1042,11 @@ def _handle_session_utterance(
     if wake:
         if cmd:
             _dispatch(ctx, wake, cmd)
+            _keep_listening(wake_state, wake)
         elif wake == "micoracle":
             ctx.cues.wake()
         else:
-            wake_state.arm(wake)
-            print(f"[{wake}] listening...", flush=True)
-            ctx.cues.wake()
+            _start_listening(ctx, wake_state, wake)
         session.touch()
         return
 
@@ -1008,12 +1062,17 @@ def _handle_armed_followup(
     if ctx.echo is not None and ctx.echo.is_echo(text):
         print(f"[echo] {text}", flush=True)
         return
+    if _is_listening_stop(text):
+        wake_state.clear()
+        print(f"[{armed}] listening ended", flush=True)
+        ctx.cues.end()
+        return
     wake, idx = detect_wake_word(text)
     if wake:
         cmd = extract_command(text, idx)
         if cmd:
             _dispatch(ctx, wake, cmd)
-            wake_state.clear()
+            _keep_listening(wake_state, wake)
             _maybe_start_session(ctx, wake)
         elif wake == "micoracle" and ctx.session is not None:
             wake_state.clear()
@@ -1021,18 +1080,40 @@ def _handle_armed_followup(
             print("[micoracle] conversation on — keep talking; say 'stop' to end", flush=True)
             ctx.cues.wake()
         else:
-            wake_state.arm(wake)
-            print(f"[{wake}] listening...", flush=True)
-            ctx.cues.wake()
+            _start_listening(ctx, wake_state, wake)
         return
     cmd = text.strip(" ,.!?;:")
     if cmd:
         _dispatch(ctx, armed, cmd)
-        wake_state.clear()
+        _keep_listening(wake_state, armed)
         _maybe_start_session(ctx, armed)
     else:
         print(f"[{armed}] empty command, ignored", flush=True)
         ctx.tts.speak("empty")
+
+
+# The command STT may write "stop" in Japanese.
+_JA_STOP_WORDS = {"ストップ", "終わり", "おわり", "終了"}
+
+
+def _is_listening_stop(text: str) -> bool:
+    return is_stop_phrase(text) or text.strip(" 。、！!?？") in _JA_STOP_WORDS
+
+
+def _start_listening(ctx: DispatchContext, wake_state: WakeState, wake: str) -> None:
+    """Arm after a bare wake word. Dictation wakes listen much longer."""
+    timeout = DICTATION_TIMEOUT_SECS if wake in DICTATION_WAKES else FOLLOWUP_TIMEOUT_SECS
+    wake_state.arm(wake, timeout)
+    print(f"[{wake}] listening for {timeout:.0f}s...", flush=True)
+    ctx.cues.wake()
+
+
+def _keep_listening(wake_state: WakeState, wake: str) -> None:
+    """After a command, dictation keeps listening. Other wakes stop."""
+    if wake in DICTATION_WAKES:
+        wake_state.arm(wake, DICTATION_TIMEOUT_SECS)
+    else:
+        wake_state.clear()
 
 
 def _maybe_start_session(ctx: DispatchContext, wake: str) -> None:
