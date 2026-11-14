@@ -246,3 +246,34 @@ class TestWakeAck:
         assert ws.active_backend() == "claude"
         hfv.handle_utterance(ctx, ws, "テストを直して")
         assert ctx.adapter.pasted == [("テストを直して", "Terminal")]
+
+
+class FakeCues:
+    def __init__(self):
+        self.events = []
+
+    def wake(self):
+        self.events.append("wake")
+
+    def sent(self):
+        self.events.append("sent")
+
+
+class TestCueRouting:
+    # 待ち受けと送信のときに、設定した合図を出す
+    def test_wake_and_sent_use_configured_cues(self):
+        ctx = make_ctx()
+        ctx.cues = FakeCues()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "テストを直して")
+        assert ctx.cues.events == ["wake", "sent"]
+        assert ctx.tts.spoken == []
+
+    # 合図を設定しなければ、声で「ok」と「sent」を話す
+    def test_default_cues_speak(self):
+        ctx = make_ctx()
+        ws = hfv.WakeState()
+        hfv.handle_utterance(ctx, ws, "claude")
+        hfv.handle_utterance(ctx, ws, "テストを直して")
+        assert ctx.tts.spoken == [hfv.WAKE_ACK_PHRASE, "sent"]

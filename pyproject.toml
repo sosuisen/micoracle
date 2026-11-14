@@ -117,4 +117,5 @@ py-modules = [
     "cli_agents",
     "agent_tools",
     "agent",
+    "cues",
 ]

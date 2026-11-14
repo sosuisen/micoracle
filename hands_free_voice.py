@@ -34,6 +34,7 @@ import numpy as np
 
 import analytics as _analytics
 import control as _control
+import cues as _cues
 import jarvis as _jarvis
 import macros as _macros
 import platform_adapter as _pa
@@ -689,6 +690,13 @@ def main() -> int:
     echo_guard = EchoGuard()
     tts_backend = _EchoAwareTTS(tts_backend, echo_guard)
 
+    cue_style = os.environ.get("MICORACLE_CUE", "voice")
+    try:
+        cues = _cues.make_cues(cue_style, tts_backend, WAKE_ACK_PHRASE)
+    except ValueError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+
     # Audio device.
     try:
         device = resolve_input_device(args.device)
@@ -740,6 +748,7 @@ def main() -> int:
         agent=agent_runner,
         session=convo,
         echo=echo_guard,
+        cues=cues,
     )
 
     def worker() -> None:
@@ -804,6 +813,7 @@ def main() -> int:
     cmd_label = command_stt.name if command_stt is not stt_backend else f"{stt_backend.name} (same)"
     print(f"  STT (command):    {cmd_label}")
     print(f"  TTS backend:      {tts_backend.name}")
+    print(f"  Cues:             {cue_style.strip().lower() or 'voice'}")
     print(f"  Target app:       {target_app or '(active app at dispatch)'}")
     print(f"  License:          {entitlement.describe()}")
     if macro_store is not None:
@@ -861,6 +871,11 @@ class DispatchContext:
     agent: "object | None" = None  # agent.AgentRunner (tool-calling), optional
     session: "ConversationSession | None" = None
     echo: "EchoGuard | None" = None
+    cues: "_cues.Cues | None" = None
+
+    def __post_init__(self) -> None:
+        if self.cues is None:
+            self.cues = _cues.VoiceCues(self.tts, WAKE_ACK_PHRASE)
 
 
 # ─────────────────────── utterance routing ────────────────────────
@@ -920,11 +935,11 @@ def handle_utterance(ctx: DispatchContext, wake_state: WakeState, text: str) -> 
         # bare "micoracle" opens a conversation session (supersedes the 8-s arm)
         session.start()
         print("[micoracle] conversation on — keep talking; say 'stop' to end", flush=True)
-        ctx.tts.speak(WAKE_ACK_PHRASE)
+        ctx.cues.wake()
     else:
         wake_state.arm(wake)
         print(f"[{wake}] listening...", flush=True)
-        ctx.tts.speak(WAKE_ACK_PHRASE)
+        ctx.cues.wake()
 
 
 def _handle_session_utterance(
@@ -973,11 +988,11 @@ def _handle_session_utterance(
         if cmd:
             _dispatch(ctx, wake, cmd)
         elif wake == "micoracle":
-            ctx.tts.speak(WAKE_ACK_PHRASE)
+            ctx.cues.wake()
         else:
             wake_state.arm(wake)
             print(f"[{wake}] listening...", flush=True)
-            ctx.tts.speak(WAKE_ACK_PHRASE)
+            ctx.cues.wake()
         session.touch()
         return
 
@@ -1004,11 +1019,11 @@ def _handle_armed_followup(
             wake_state.clear()
             ctx.session.start()
             print("[micoracle] conversation on — keep talking; say 'stop' to end", flush=True)
-            ctx.tts.speak(WAKE_ACK_PHRASE)
+            ctx.cues.wake()
         else:
             wake_state.arm(wake)
             print(f"[{wake}] listening...", flush=True)
-            ctx.tts.speak(WAKE_ACK_PHRASE)
+            ctx.cues.wake()
         return
     cmd = text.strip(" ,.!?;:")
     if cmd:
@@ -1149,7 +1164,7 @@ def _dispatch(ctx: DispatchContext, wake: str, command: str) -> None:
         ctx.tts.speak("error")
         return
     print(f"[{wake}] sent to {ctx.target_app}", flush=True)
-    ctx.tts.speak("sent")
+    ctx.cues.sent()
 
     if ctx.tracker is not None:
         ctx.tracker.record(
