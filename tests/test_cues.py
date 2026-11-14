@@ -48,12 +48,29 @@ class TestToneCues:
 
 
 class TestToneSamples:
-    # トーンの波形は、指定した長さで、音量の上限を超えない
+    # トーンの波形は、指定した長さの音のあとに無音が続き、音量の上限を超えない
     def test_length_and_peak(self):
         samples = cues.tone_samples(440.0, duration_ms=100, sample_rate=16000)
+        tail = int(16000 * cues.TONE_TAIL_MS / 1000)
         assert samples.dtype == np.float32
-        assert len(samples) == 1600
+        assert len(samples) == 1600 + tail
         assert np.max(np.abs(samples)) <= cues.TONE_VOLUME
+
+    # 音のあとの無音は、すべて0である
+    def test_ends_with_silent_tail(self):
+        samples = cues.tone_samples(440.0, duration_ms=100, sample_rate=16000)
+        tail = int(16000 * cues.TONE_TAIL_MS / 1000)
+        assert tail > 0
+        assert np.all(samples[-tail:] == 0.0)
+
+    # フェードは、なめらかな曲線で、端の近くほど音が小さい
+    def test_fade_is_smooth_curve(self):
+        samples = cues.tone_samples(440.0, duration_ms=200, sample_rate=16000)
+        fade = int(16000 * cues.TONE_FADE_MS / 1000)
+        assert fade >= int(16000 * 0.03)
+        early = np.max(np.abs(samples[: fade // 4]))
+        late = np.max(np.abs(samples[fade // 2 : fade]))
+        assert early < late
 
     # 波形の始めと終わりは0で、クリック音が出ない
     def test_fades_in_and_out(self):

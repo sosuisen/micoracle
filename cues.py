@@ -18,7 +18,11 @@ LA_HZ = 1760.0          # A6: listening
 FA_HZ = 1396.91         # F6: sent
 DO_HZ = 1046.5          # C6: listening ended
 TONE_MS = 250
-TONE_FADE_MS = 10       # fade in and out. A hard edge clicks.
+# A short linear fade still sounds cut off. A 40ms cosine fade does not.
+TONE_FADE_MS = 40
+# Silence after the tone. The stream then closes in silence.
+# Some USB DACs pop or drop the last moment when a stream closes.
+TONE_TAIL_MS = 150
 TONE_VOLUME = 0.3
 TONE_SAMPLE_RATE = 44100
 
@@ -74,10 +78,12 @@ def tone_samples(
     t = np.arange(n) / sample_rate
     wave = TONE_VOLUME * np.sin(2 * np.pi * freq * t)
     fade = min(int(sample_rate * TONE_FADE_MS / 1000), n // 2)
+    ramp = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, fade))
     envelope = np.ones(n)
-    envelope[:fade] = np.linspace(0.0, 1.0, fade)
-    envelope[n - fade:] = np.linspace(1.0, 0.0, fade)
-    return (wave * envelope).astype(np.float32)
+    envelope[:fade] = ramp
+    envelope[n - fade:] = ramp[::-1]
+    tail = np.zeros(int(sample_rate * TONE_TAIL_MS / 1000))
+    return np.concatenate([wave * envelope, tail]).astype(np.float32)
 
 
 def play_tone(freq: float) -> None:
