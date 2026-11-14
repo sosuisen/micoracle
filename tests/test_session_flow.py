@@ -288,14 +288,14 @@ class TestDictationListening:
         ctx.cues = FakeCues()
         return ctx
 
-    # 素の「claude」は、口述の待ち受けを120秒にする
+    # 素の「claude」は、口述の待ち受けを30秒にする
     def test_bare_claude_listens_for_dictation_timeout(self):
         ctx = self._ctx()
         ws = hfv.WakeState()
         hfv.handle_utterance(ctx, ws, "claude")
         assert ws.active_backend() == "claude"
         assert ws._expires_at - time.monotonic() > hfv.FOLLOWUP_TIMEOUT_SECS
-        assert hfv.DICTATION_TIMEOUT_SECS == 120.0
+        assert hfv.DICTATION_TIMEOUT_SECS == 30.0
 
     # 送ったあとも待ち受けが続き、ウェイクワードなしで次の文を送れる
     def test_keeps_listening_after_sent(self):
