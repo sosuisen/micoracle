@@ -239,8 +239,10 @@ class TestWindowsAdapterContract:
         fake_pyautogui.hotkey = MagicMock()
         fake_pyautogui.press = MagicMock()
         fake_win32gui = MagicMock()
-        fake_win32gui.EnumWindows = MagicMock()
+        # Report one window (hwnd 42) owned by the target process.
+        fake_win32gui.EnumWindows = MagicMock(side_effect=lambda cb, extra: cb(42, extra))
         fake_win32gui.IsWindowVisible = MagicMock(return_value=True)
+        fake_win32gui.IsIconic = MagicMock(return_value=False)
         fake_win32gui.SetForegroundWindow = MagicMock()
         fake_win32gui.GetForegroundWindow = MagicMock(return_value=42)
         fake_win32process = MagicMock()
@@ -255,6 +257,8 @@ class TestWindowsAdapterContract:
             "win32gui": fake_win32gui,
             "win32process": fake_win32process,
             "psutil": fake_psutil,
+            "win32api": MagicMock(),
+            "win32con": MagicMock(),
         }
 
     def test_dispatch_call_sequence(self, monkeypatch):
@@ -311,3 +315,27 @@ class TestWindowsAdapterContract:
         # Restore must have happened.
         last_copy = fakes["pyperclip"].copy.call_args_list[-1]
         assert last_copy == call("OLD_CLIP")
+
+    def test_missing_target_window_skips_paste(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "win32")
+        fakes = self._fake_modules()
+        fakes["win32gui"].EnumWindows.side_effect = None
+        with patch.dict(sys.modules, fakes):
+            adapter = pa.WindowsAdapter()
+            with pytest.raises(RuntimeError):
+                adapter.paste_and_return("x", "WindowsTerminal.exe")
+
+        fakes["pyautogui"].hotkey.assert_not_called()
+        assert fakes["pyperclip"].copy.call_args_list[-1] == call("OLD_CLIP")
+
+    def test_unfocused_target_window_skips_paste(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "win32")
+        fakes = self._fake_modules()
+        fakes["win32gui"].GetForegroundWindow.return_value = 7
+        with patch.dict(sys.modules, fakes):
+            adapter = pa.WindowsAdapter()
+            with pytest.raises(RuntimeError):
+                adapter.paste_and_return("x", "WindowsTerminal.exe")
+
+        fakes["pyautogui"].hotkey.assert_not_called()
+        assert fakes["pyperclip"].copy.call_args_list[-1] == call("OLD_CLIP")
