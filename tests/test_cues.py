@@ -25,16 +25,26 @@ class TestVoiceCues:
         c.sent()
         assert tts.spoken == ["ok", "sent"]
 
+    # 声の合図では、待ち受けの終わりに何も話さない
+    def test_end_is_silent(self):
+        tts = FakeTTS()
+        cues.VoiceCues(tts, wake_phrase="ok").end()
+        assert tts.spoken == []
+
 
 class TestToneCues:
-    # トーンの合図では、待ち受けでソ、送信で下のドを鳴らす
-    def test_plays_sol_then_lower_do(self):
+    # トーンの合図では、待ち受けでラ、送信でファ、終わりでドを鳴らす
+    def test_plays_la_fa_do(self):
         played = []
         c = cues.ToneCues(play=lambda freq: played.append(freq))
         c.wake()
         c.sent()
-        assert played == [cues.SOL_HZ, cues.DO_HZ]
-        assert cues.DO_HZ < cues.SOL_HZ
+        c.end()
+        assert played == [cues.LA_HZ, cues.FA_HZ, cues.DO_HZ]
+
+    # 3つの音は、だんだん低くなる
+    def test_tones_descend(self):
+        assert cues.LA_HZ > cues.FA_HZ > cues.DO_HZ
 
 
 class TestToneSamples:

@@ -1,8 +1,9 @@
 """Status cues for the two-step wake flow: spoken words or short tones.
 
-A cue tells the user two things: "I am listening" after a bare wake word,
-and "sent" after the command is pasted. Tones are quicker than words.
-They also rarely come back through the mic as text.
+A cue tells the user three things: "I am listening" after a bare wake word,
+"sent" after the command is pasted, and "I stopped listening".
+Tones are quicker than words. They also rarely come back through the mic
+as text.
 """
 
 from __future__ import annotations
@@ -12,9 +13,11 @@ from typing import Protocol
 
 import numpy as np
 
-SOL_HZ = 784.0          # G5: listening
-DO_HZ = 523.25          # C5, below SOL: sent
-TONE_MS = 150
+# The three tones step down: listening, sent, then listening ended.
+LA_HZ = 1760.0          # A6: listening
+FA_HZ = 1396.91         # F6: sent
+DO_HZ = 1046.5          # C6: listening ended
+TONE_MS = 250
 TONE_FADE_MS = 10       # fade in and out. A hard edge clicks.
 TONE_VOLUME = 0.3
 TONE_SAMPLE_RATE = 44100
@@ -23,6 +26,7 @@ TONE_SAMPLE_RATE = 44100
 class Cues(Protocol):
     def wake(self) -> None: ...
     def sent(self) -> None: ...
+    def end(self) -> None: ...
 
 
 class _Speaker(Protocol):
@@ -42,17 +46,24 @@ class VoiceCues:
     def sent(self) -> None:
         self._tts.speak("sent")
 
+    def end(self) -> None:
+        # The voice mode has always ended listening in silence.
+        return
+
 
 class ToneCues:
-    """Play SOL when listening and the lower DO when sent."""
+    """Play LA when listening, FA when sent, and DO when listening ends."""
 
     def __init__(self, play: Callable[[float], None] | None = None) -> None:
         self._play = play or play_tone
 
     def wake(self) -> None:
-        self._play(SOL_HZ)
+        self._play(LA_HZ)
 
     def sent(self) -> None:
+        self._play(FA_HZ)
+
+    def end(self) -> None:
         self._play(DO_HZ)
 
 
